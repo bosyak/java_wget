@@ -1,0 +1,15 @@
+.idea
+.DS_Store
+releases
+target
+output
+tmp
+.classpath
+.project
+.settings
+out
+*.ipr
+*.iws
+*.iml
+build
+.gradle
