@@ -6,12 +6,8 @@ import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Paths;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Set;
-import java.util.TreeSet;
+import java.util.*;
 import java.util.concurrent.ConcurrentLinkedQueue;
-import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.atomic.AtomicLong;
@@ -27,8 +23,7 @@ public class Wget {
     private Semaphore bandwidth;
     private String destDir;
     private ConcurrentLinkedQueue<DownloadTask> queue;
-    private AtomicLong downloadTotal = new AtomicLong(0);
-    private ExecutorService executorService;
+    private long totalDownload;
     private List<Thread> workingThreads;
 
     public static void main(String[] args) {
@@ -56,17 +51,29 @@ public class Wget {
         this.parameters = parameters;
 
         openOutputDir();
-        openFile();
+        readSourceFile();
         startBandwidthFiller();
-        startDownloadThreads();
+        startDownloadAndCopyThreads();
         printStat();
     }
 
     private void printStat() {
-        while (!executorService.isTerminated()) {
+        long startTime = System.currentTimeMillis();
+
+        for (Thread thread : workingThreads) {
+            try {
+                thread.join();
+            } catch (InterruptedException e) {
+                System.err.println(e.getMessage());
+            }
         }
 
-        System.out.println("Всего скачано " + downloadTotal);
+        long duractionSec = (System.currentTimeMillis() - startTime) / 1000;
+        long kb = totalDownload / 1024;
+
+        System.out.println("Время работы: " + duractionSec + ", секунд");
+        System.out.println("Всего скачано: " + kb + ", килобайт");
+        System.out.println("Средняя скорость: " + (kb / duractionSec) + " килобайт в секунду");
     }
 
     private void openOutputDir() {
@@ -80,25 +87,24 @@ public class Wget {
         }
     }
 
-    private void openFile() {
+    private void readSourceFile() {
 
         HashMap<String, Set<String>> map = new HashMap<>();
 
         try {
-            Files
-                    .lines(Paths.get(parameters.getInputPath()))
-                    .forEach(s -> {
-                        String[] split = s.trim().split("[ ]+");
+            Files.lines(Paths.get(parameters.getInputPath()))
+                    .forEach(line -> {
+                        String[] split = line.trim().split("[ ]+");
                         if (split.length == 2) {
                             String srcUrl = split[0].toLowerCase();
                             String dest = split[1];
 
-                            Set<String> dests = map.get(srcUrl);
-                            if (dests == null) {
-                                dests = new TreeSet<String>();
-                                map.put(srcUrl, dests);
+                            Set<String> destinations = map.get(srcUrl);
+                            if (destinations == null) {
+                                destinations = new TreeSet<String>();
+                                map.put(srcUrl, destinations);
                             }
-                            dests.add(dest);
+                            destinations.add(dest);
                         }
 
                     });
@@ -122,21 +128,18 @@ public class Wget {
             @Override
             public void run() {
 
-                int timeout = 200;
-                int fillAmount = parameters.getMaxBandwidth() / (1000 / timeout);
+                int sleepTime = 200;
+                int fillAmount = parameters.getMaxBandwidth() / (1000 / sleepTime);
 
-                while (true) {
-
-                    if (bandwidth.availablePermits() < parameters.getMaxBandwidth()) {
-                        bandwidth.release(fillAmount);
-                        System.out.println("Положили " + fillAmount + ", осталось еще " + bandwidth.availablePermits());
+                try {
+                    while (true) {
+                        if (bandwidth.availablePermits() < parameters.getMaxBandwidth()) {
+                            bandwidth.release(fillAmount);
+                        }
+                        Thread.sleep(sleepTime);
                     }
-
-                    try {
-                        Thread.sleep(timeout);
-                    } catch (InterruptedException e) {
-                        e.printStackTrace();
-                    }
+                } catch (InterruptedException e) {
+                    e.printStackTrace();
                 }
 
             }
@@ -146,33 +149,27 @@ public class Wget {
 
     }
 
-    private void startDownloadThreads() {
-        executorService = Executors.newFixedThreadPool(parameters.getThreadsCount());
-        executorService.execute(() -> {
-            DownloadTask downloadTask = queue.poll();
-            if (d)
-        });
-    }
+    private void startDownloadAndCopyThreads() {
+        workingThreads = new ArrayList<>();
 
-
-    private void startJob() {
-
-        new Thread() {
-            @Override
-            public void run() {
-
-                while (true) {
-                    try {
-                        System.out.println("Осталось " + bandwidth.availablePermits());
-                        bandwidth.acquire(5);
-//                        Thread.sleep(200);
-
-                    } catch (InterruptedException e) {
-                        e.printStackTrace();
-                    }
+        for (int i = 0; i < parameters.getThreadsCount(); i++) {
+            DownloadAndCopyThread thread = new DownloadAndCopyThread() {
+                @Override
+                public DownloadTask getNextDownloadTask() {
+                    return queue.poll();
                 }
 
-            }
-        }.start();
+                @Override
+                public void summarizeDownloadSize(long downloadSize) {
+                    synchronized (Wget.this) {
+                        totalDownload += downloadSize;
+                    }
+                }
+            };
+            workingThreads.add(thread);
+            thread.start();
+        }
     }
+
+
 }
