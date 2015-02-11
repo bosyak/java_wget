@@ -26,10 +26,9 @@ public class Wget {
     private List<Thread> workingThreads;
 
     public static void main(String[] args) {
+        Args arz = new Args();
+        JCommander jc = new JCommander(arz);
         try {
-            Args arz = new Args();
-            JCommander jc = new JCommander(arz);
-
             jc.parse(args);
             new Wget(arz);
 
