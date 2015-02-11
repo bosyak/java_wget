@@ -2,15 +2,14 @@ package wget;
 
 import com.beust.jcommander.JCommander;
 
+import javax.xml.bind.SchemaOutputResolver;
 import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Paths;
 import java.util.*;
 import java.util.concurrent.ConcurrentLinkedQueue;
-import java.util.concurrent.Executors;
 import java.util.concurrent.Semaphore;
-import java.util.concurrent.atomic.AtomicLong;
 import java.util.stream.Collectors;
 
 /**
@@ -27,23 +26,17 @@ public class Wget {
     private List<Thread> workingThreads;
 
     public static void main(String[] args) {
-
-        Args arz = new Args();
-
-        JCommander jc = new JCommander(arz);
         try {
+            Args arz = new Args();
+            JCommander jc = new JCommander(arz);
+
             jc.parse(args);
+            new Wget(arz);
+
         } catch (Exception e) {
             jc.usage();
             String message = e.getMessage();
             System.out.println("Не указаны обязательные параметры: " + message.substring(message.indexOf(":") + 2));
-            return;
-        }
-
-        try {
-            new Wget(arz);
-        } catch (Exception e) {
-            System.err.println(e.getMessage());
         }
     }
 
@@ -52,9 +45,11 @@ public class Wget {
 
         openOutputDir();
         readSourceFile();
-        startBandwidthFiller();
+        startBandwidthFillerThread();
         startDownloadAndCopyThreads();
         printStat();
+
+        System.out.println("Done.");
     }
 
     private void printStat() {
@@ -82,26 +77,28 @@ public class Wget {
             destDir += "/";
         }
         File file = new File(destDir);
-        if (!file.mkdirs()) {
-            throw new RuntimeException("Не удалось создать директорию для загружаемых файлов");
+        if (!file.exists()) {
+            if (!file.mkdirs()) {
+                throw new RuntimeException("Не удалось создать директорию для загружаемых файлов");
+            }
         }
     }
 
     private void readSourceFile() {
 
-        HashMap<String, Set<String>> map = new HashMap<>();
+        HashMap<String, TreeSet<String>> map = new HashMap<>();
 
         try {
             Files.lines(Paths.get(parameters.getInputPath()))
                     .forEach(line -> {
-                        String[] split = line.trim().split("[ ]+");
+                        String[] split = line.trim().split("[ \\t]+");
                         if (split.length == 2) {
                             String srcUrl = split[0].toLowerCase();
-                            String dest = split[1];
+                            String dest = destDir + split[1];
 
-                            Set<String> destinations = map.get(srcUrl);
+                            TreeSet<String> destinations = map.get(srcUrl);
                             if (destinations == null) {
-                                destinations = new TreeSet<String>();
+                                destinations = new TreeSet<>();
                                 map.put(srcUrl, destinations);
                             }
                             destinations.add(dest);
@@ -113,6 +110,7 @@ public class Wget {
             throw new RuntimeException(e.getMessage());
         }
 
+        queue = new ConcurrentLinkedQueue<>();
         queue.addAll(map
                 .entrySet()
                 .stream()
@@ -121,7 +119,7 @@ public class Wget {
 
     }
 
-    private void startBandwidthFiller() {
+    private void startBandwidthFillerThread() {
         bandwidth = new Semaphore(parameters.getMaxBandwidth());
 
         Thread filler = new Thread() {
