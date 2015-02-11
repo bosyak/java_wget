@@ -165,6 +165,11 @@ public class Wget {
                         totalDownload += downloadSize;
                     }
                 }
+
+                @Override
+                public void getBandwidthQuota(int quota) throws InterruptedException {
+                    bandwidth.acquire(quota);
+                }
             };
             workingThreads.add(thread);
             thread.start();
